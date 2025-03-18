@@ -340,4 +340,16 @@ public partial class CCSPlayerController
             NativeAPI.SetClientVoiceFlags(Handle, (Byte)value);
         }
     }
+
+    [Obsolete(
+        "You are trying to call Teleport on a non-physical player. Maybe you mean Pawn? (See: https://docs.cssharp.dev/docs/guides/referencing-players.html#controllers--pawns)")]
+    public new void Teleport(Vector? position = null, QAngle? angles = null, Vector? velocity = null)
+    {
+        base.Teleport(position, angles, velocity);
+    }
+
+    public void ReplicateConVar(string conVar, string value)
+    {
+        NativeAPI.ReplicateConvar(Slot, conVar, value);
+    }
 }

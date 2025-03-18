@@ -15,6 +15,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -301,6 +302,26 @@ namespace TestPlugin
                         return;
                 }
             });
+
+            // Hide every door (prop_door_rotating) for everyone as a test
+            RegisterListener<Listeners.CheckTransmit>((CCheckTransmitInfoList infoList) =>
+            {
+                IEnumerable<CPropDoorRotating> doors = Utilities.FindAllEntitiesByDesignerName<CPropDoorRotating>("prop_door_rotating");
+
+                if (!doors.Any())
+                    return;
+
+                foreach ((CCheckTransmitInfo info, CCSPlayerController? player) in infoList)
+                {
+                    if (player == null)
+                        continue;
+
+                    foreach (CPropDoorRotating door in doors)
+                    {
+                        info.TransmitEntities.Remove(door);
+                    }
+                }
+            });
         }
 
         private void SetupCommands()
@@ -369,6 +390,16 @@ namespace TestPlugin
             Logger.LogInformation("Player {Name} has connected! (pre)", @event.Name);
 
             return HookResult.Continue;
+        }
+
+        [ListenerHandler<Listeners.OnClientPutInServer>]
+        public void OnClientPutInServer(int playerSlot)
+        {
+            var player = Utilities.GetPlayerFromSlot(playerSlot);
+
+            if (player == null || player.IsBot) return;
+
+            player.PrintToChat("Welcome to the server!");
         }
 
         [ConsoleCommand("css_testinput", "Test AcceptInput and AddEntityIOEvent")]

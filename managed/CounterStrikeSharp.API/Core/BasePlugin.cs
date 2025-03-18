@@ -116,9 +116,6 @@ namespace CounterStrikeSharp.API.Core
 
         public readonly Dictionary<Delegate, CallbackSubscriber> Handlers =
             new Dictionary<Delegate, CallbackSubscriber>();
-
-        public readonly Dictionary<Delegate, CallbackSubscriber> CommandHandlers =
-            new Dictionary<Delegate, CallbackSubscriber>();
         
         public readonly Dictionary<Delegate, CallbackSubscriber> CommandListeners =
             new Dictionary<Delegate, CallbackSubscriber>();
@@ -131,6 +128,8 @@ namespace CounterStrikeSharp.API.Core
 
         internal readonly Dictionary<Delegate, EntityIO.EntityOutputCallback> EntitySingleOutputHooks =
             new Dictionary<Delegate, EntityIO.EntityOutputCallback>();
+
+        public readonly List<CommandDefinition> CommandDefinitions = new List<CommandDefinition>();
 
         public readonly List<Timer> Timers = new List<Timer>();
         
@@ -193,11 +192,13 @@ namespace CounterStrikeSharp.API.Core
         public void AddCommand(string name, string description, CommandInfo.CommandCallback handler)
         {
             var definition = new CommandDefinition(name, description, handler);
+            CommandDefinitions.Add(definition);
             CommandManager.RegisterCommand(definition);
         }
         
         private void AddCommand(CommandDefinition definition)
         {
+            CommandDefinitions.Add(definition);
             CommandManager.RegisterCommand(definition);
         }
 
@@ -229,14 +230,13 @@ namespace CounterStrikeSharp.API.Core
         /// <param name="handler">The callback function to be invoked when the command is executed.</param>
         public void RemoveCommand(string name, CommandInfo.CommandCallback handler)
         {
-            if (CommandHandlers.ContainsKey(handler))
+            var definition = CommandDefinitions.FirstOrDefault(
+                definition => definition.Name == name && definition.Callback == handler);
+
+            if (definition != null)
             {
-                var subscriber = CommandHandlers[handler];
-
-                NativeAPI.RemoveCommand(name, subscriber.GetInputArgument());
-
-                FunctionReference.Remove(subscriber.GetReferenceIdentifier());
-                CommandHandlers.Remove(handler);
+                CommandDefinitions.Remove(definition);
+                CommandManager.RemoveCommand(definition);
             }
         }
 
@@ -396,20 +396,26 @@ namespace CounterStrikeSharp.API.Core
         }
 
         /// <summary>
-        /// Registers all game event handlers that are decorated with the <see cref="GameEventHandlerAttribute"/> attribute.
+        /// Registers all game event handlers that are decorated with the <see cref="GameEventHandlerAttribute"/> and <see cref="ListenerHandlerAttribute{T}"/> attribute.
         /// </summary>
         /// <param name="instance">The instance of the object where the event handlers are defined.</param>
         public void RegisterAttributeHandlers(object instance)
         {
-            var eventHandlers = instance.GetType()
-                .GetMethods()
+            var methods = instance.GetType().GetMethods();
+
+            var eventHandlers = methods
                 .Where(method => method.GetCustomAttribute<GameEventHandlerAttribute>() != null)
                 .Where(method =>
                     method.GetParameters().FirstOrDefault()?.ParameterType.IsSubclassOf(typeof(GameEvent)) == true)
                 .ToArray();
+            
+            var listenerHandlers = methods
+                .Where(method => method.GetCustomAttribute(typeof(ListenerHandlerAttribute<>)) != null)
+                .ToArray();
 
-            var method = typeof(BasePlugin).GetMethod("RegisterEventHandlerInternal", BindingFlags.NonPublic |
+            var registerEvent = typeof(BasePlugin).GetMethod(nameof(RegisterEventHandlerInternal), BindingFlags.NonPublic |
                 BindingFlags.Instance)!;
+            var registerListener = GetType().GetMethod(nameof(RegisterListener))!;
 
             foreach (var eventHandler in eventHandlers)
             {
@@ -421,8 +427,22 @@ namespace CounterStrikeSharp.API.Core
                 var actionType = typeof(GameEventHandler<>).MakeGenericType(parameterType);
                 var action = Delegate.CreateDelegate(actionType, instance, eventHandler);
 
-                var generic = method.MakeGenericMethod(parameterType);
-                generic.Invoke(this, new object[] { eventName, action, hookMode == HookMode.Post });
+                var registerEventGeneric = registerEvent.MakeGenericMethod(parameterType);
+                registerEventGeneric.Invoke(this, [eventName, action, hookMode == HookMode.Post]);
+            }
+
+            foreach (var listnerHandler in listenerHandlers)
+            {
+                var attribute = listnerHandler.GetCustomAttribute(typeof(ListenerHandlerAttribute<>))!;
+                var listenerType = attribute.GetType().GetGenericArguments().First();
+
+                if (listenerType.GetCustomAttribute<ListenerNameAttribute>() == null)
+                    throw new ArgumentException("Listener of type T is invalid and does not have a name attribute",
+                        listenerType.Name);
+
+                var listenerDelegate = Delegate.CreateDelegate(listenerType, instance, listnerHandler); 
+
+                registerListener.MakeGenericMethod(listenerType).Invoke(this, [listenerDelegate]);
             }
         }
 
@@ -621,11 +641,6 @@ namespace CounterStrikeSharp.API.Core
             {
                 subscriber.Dispose();
             }
-
-            foreach (var subscriber in CommandHandlers.Values)
-            {
-                subscriber.Dispose();
-            }
             
             foreach (var subscriber in CommandListeners.Values)
             {
@@ -640,6 +655,11 @@ namespace CounterStrikeSharp.API.Core
             foreach (var subscriber in EntityOutputHooks.Values)
             {
                 subscriber.Dispose();
+            }
+
+            foreach (var definition in CommandDefinitions)
+            {
+                CommandManager.RemoveCommand(definition);
             }
 
             foreach (var timer in Timers)
